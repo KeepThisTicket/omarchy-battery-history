@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "kov.battery-history",
+  "name": "Battery history",
+  "version": "1.0.0",
+  "author": "KeepThisTicket",
+  "description": "Battery level over time with charging, screen-on, lid and sleep periods",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Battery history",
+    "description": "Battery level over time with charging, screen-on, lid and sleep periods",
+    "category": "System",
+    "allowMultiple": false
+  }
+}
