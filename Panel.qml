@@ -72,6 +72,26 @@ Panel {
   readonly property var samples: batteryLog ? Model.withLivePoint(batteryLog.samples, batteryLog.now, livePercent, liveState) : []
   readonly property var screenSegs: batteryLog ? batteryLog.screen : []
   readonly property var powerSegs: batteryLog ? batteryLog.power : []
+
+  // Power draw overlay: UPower's rate history, on battery only (on the
+  // charger the rate is what goes into the battery, not what the laptop
+  // uses). Toggled by the Power chip; setting "showPower".
+  readonly property bool showPower: setting("showPower", false) === true
+  readonly property color powerColor: "#E0694A"
+  readonly property var rates: batteryLog && Array.isArray(batteryLog.rate) ? batteryLog.rate : []
+  readonly property real rateGap: Model.rateGap(batteryLog ? batteryLog.rateBucket : 60)
+  readonly property real powerMax: Model.rateScale(rates, t0, t1)
+  readonly property real shownWatts: hoverTime < 0 ? NaN : Model.rateAt(rates, hoverTime, rateGap)
+  readonly property var avgDraw: Model.averageRate(rates, t0, t1)
+
+  function watts(v) {
+    return (v === null || v === undefined || isNaN(v)) ? "—" : strings.t("watts").arg(Commons.I18n.formatNumber(v, 1))
+  }
+
+  function setShowPower(on) {
+    root.settings = Object.assign({}, root.settings, { showPower: on })
+    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
+  }
   // Stats for the window on screen, so they follow the zoom. Raw samples,
   // without the live point, so the full range matches the collector's.
   readonly property var stats: batteryLog
@@ -122,6 +142,7 @@ Panel {
       if (s) parts.push(tr("screen." + s))
       var p = Model.segmentAt(powerSegs, hoverTime)
       if (p && s !== "off" && s !== "hibernate") parts.push(tr("power." + p))
+      if (showPower && !isNaN(shownWatts)) parts.push(watts(shownWatts))
       return parts.join(" · ")
     }
     if (!batteryLog) return loading ? tr("loading") : tr("noData")
@@ -382,18 +403,35 @@ Panel {
           }
         }
 
-        // ---------- Range ----------
-        ButtonGroup {
-          id: rangeGroup
+        // ---------- Range, and the power overlay toggle ----------
+        Item {
           width: parent.width
-          spacing: Style.space(6)
-          focusable: false
-          options: Model.RANGES.map(function(r) { return { value: r.value, label: strings.t("chip." + r.value) } })
-          value: root.range
-          foreground: root.fg
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onChanged: function(v) { root.setRange(v) }
+          implicitHeight: Math.max(rangeGroup.implicitHeight, powerToggle.implicitHeight)
+
+          ButtonGroup {
+            id: rangeGroup
+            spacing: Style.space(6)
+            focusable: false
+            options: Model.RANGES.map(function(r) { return { value: r.value, label: strings.t("chip." + r.value) } })
+            value: root.range
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onChanged: function(v) { root.setRange(v) }
+          }
+
+          Button {
+            id: powerToggle
+            anchors.right: parent.right
+            text: root.tr("chip.power")
+            tooltipText: root.tr("chip.powerTip")
+            selected: root.showPower
+            bordered: true
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.setShowPower(!root.showPower)
+          }
         }
 
         // ---------- Plot: chart, strips, time axis ----------
@@ -401,8 +439,10 @@ Panel {
           id: plot
           width: parent.width
           readonly property real gutter: Style.space(52)
+          // Room for the watt axis on the right while the overlay is on.
+          readonly property real rightGutter: root.showPower ? Style.space(40) : 0
           readonly property real plotX: gutter
-          readonly property real plotW: width - gutter
+          readonly property real plotW: width - gutter - rightGutter
           readonly property real chartH: Style.space(128)
           readonly property real laneH: Math.max(4, Style.space(6))
           readonly property real laneGap: Style.space(12)
@@ -428,6 +468,22 @@ Panel {
             }
           }
 
+          // Watt labels on the right, in the overlay's colour
+          Repeater {
+            model: root.showPower ? [1, 0.5, 0] : []
+            Text {
+              required property var modelData
+              textFormat: Text.PlainText
+              text: root.watts(root.powerMax * modelData).replace(/\.0(?=\D*$)/, "")
+              color: root.powerColor
+              opacity: 0.85
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              x: plot.plotX + plot.plotW + Style.space(6)
+              y: chart.yFor(modelData * 100) - height / 2
+            }
+          }
+
           Canvas {
             id: chart
             x: plot.plotX
@@ -437,6 +493,7 @@ Panel {
 
             readonly property real pad: Style.space(4)
             function yFor(p) { return pad + (1 - p / 100) * (height - 2 * pad) }
+            function yForW(w) { return yFor(100 * Math.min(1, w / Math.max(1, root.powerMax))) }
             function xFor(t) { return width * (t - root.t0) / Math.max(1, root.t1 - root.t0) }
 
             onPaint: {
@@ -505,10 +562,32 @@ Panel {
                 ctx.lineTo(px(j), py(j))
               }
               if (current !== null) ctx.stroke()
+
+              // Power draw on its own watt scale, broken across gaps
+              // (charging, asleep, off), over the battery line.
+              var r = root.rates
+              if (!root.showPower || !r || r.length === 0) return
+              var rv = Model.visibleRange(r, root.t0, root.t1)
+              ctx.globalAlpha = 0.9
+              ctx.strokeStyle = String(root.powerColor)
+              ctx.lineWidth = Math.max(1, Style.space(1.5))
+              ctx.beginPath()
+              for (var q = rv.lo; q <= rv.hi; q++) {
+                var rx = xFor(r[q][0]), ry = yForW(r[q][1])
+                if (q === rv.lo || r[q][0] - r[q - 1][0] > root.rateGap) {
+                  // A lone point still shows as a short tick.
+                  ctx.moveTo(rx - 1, ry)
+                }
+                ctx.lineTo(rx, ry)
+              }
+              ctx.stroke()
             }
 
             Connections {
               target: root
+              function onShowPowerChanged() { chart.requestPaint() }
+              function onRatesChanged() { chart.requestPaint() }
+              function onPowerMaxChanged() { chart.requestPaint() }
               function onSamplesChanged() { chart.requestPaint() }
               function onScreenSegsChanged() { chart.requestPaint() }
               function onFgChanged() { chart.requestPaint() }
@@ -610,6 +689,15 @@ Panel {
             x: Math.round(plot.plotX + plot.plotW * Math.max(0, root.hoverFraction) - width / 2)
             y: chart.yFor(isNaN(root.shownPercent) ? 0 : root.shownPercent) - height / 2
           }
+          Rectangle {
+            visible: root.showPower && root.hoverFraction >= 0 && !isNaN(root.shownWatts)
+            width: Math.max(6, Style.space(7))
+            height: width
+            radius: width / 2
+            color: root.powerColor
+            x: Math.round(plot.plotX + plot.plotW * Math.max(0, root.hoverFraction) - width / 2)
+            y: chart.yForW(isNaN(root.shownWatts) ? 0 : root.shownWatts) - height / 2
+          }
 
           MouseArea {
             x: plot.plotX
@@ -647,6 +735,7 @@ Panel {
           LegendDot { swatch: root.chargeColor; text: root.tr("legend.charging") }
           LegendDot { swatch: Util.alpha(root.fg, 0.5); text: root.tr("legend.sleep") }
           LegendDot { swatch: root.hibernateColor; text: root.tr("legend.hibernate") }
+          LegendDot { visible: root.showPower; swatch: root.powerColor; text: root.tr("legend.power") }
         }
 
         // ---------- Stats ----------
@@ -683,6 +772,7 @@ Panel {
               InfoPair { label: root.tr("stats.drainOn"); value: root.rate(root.stats.drainScreenOn) }
               InfoPair { label: root.tr("stats.drainSleep"); value: root.rate(root.stats.drainAsleep) }
               InfoPair { label: root.tr("stats.lid"); value: Model.formatDuration(root.stats.lidClosed) }
+              InfoPair { label: root.tr("stats.avgDraw"); value: root.watts(root.avgDraw) }
               InfoPair {
                 label: root.tr("stats.runtime")
                 value: root.stats.drainScreenOn ? Model.formatDuration(100 / root.stats.drainScreenOn * 3600) : "—"

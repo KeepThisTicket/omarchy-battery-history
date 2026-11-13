@@ -53,5 +53,10 @@
   "sleep.lidOther": "Closing the lid: %1. The hibernate delay only applies to suspend-then-hibernate.",
   "sleep.cancelled": "Hibernate delay not changed: password dialog cancelled.",
   "sleep.saveFailed": "Could not save the hibernate delay.",
-  "sleep.idleSaveFailed": "Could not save the screensaver and lock times."
+  "sleep.idleSaveFailed": "Could not save the screensaver and lock times.",
+  "chip.power": "Power",
+  "chip.powerTip": "Overlay the laptop's power draw while on battery",
+  "legend.power": "Power draw (on battery)",
+  "stats.avgDraw": "Avg draw, on battery",
+  "watts": "%1 W"
 }

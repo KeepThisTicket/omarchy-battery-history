@@ -201,6 +201,64 @@ function withLivePoint(samples, now, percent, state) {
   return out
 }
 
+// ---------- Power ----------
+// rates are [[t, watts], ...] from the collector, on battery only, one point
+// per time bucket. Points further apart than `gap` seconds are separate runs
+// (charging, asleep or off in between), so lines break there.
+
+// Gap past which two power points are not joined.
+function rateGap(bucket) {
+  return Math.max(600, 3 * (Number(bucket) || 60))
+}
+
+// A round top for the watt axis: 5, 10, 15, 20, 30, 40, 60, 80, 100, ...
+function niceCeil(v) {
+  var steps = [5, 10, 15, 20, 30, 40, 60, 80, 100, 150, 200, 300, 500]
+  for (var i = 0; i < steps.length; i++) if (v <= steps[i]) return steps[i]
+  return Math.ceil(v / 100) * 100
+}
+
+// The scale top for the points in [start, end].
+function rateScale(rates, start, end) {
+  var top = 0
+  for (var i = 0; i < (rates || []).length; i++) {
+    var r = rates[i]
+    if (r[0] >= start && r[0] <= end && r[1] > top) top = r[1]
+  }
+  return niceCeil(Math.max(top, 1))
+}
+
+// Watts at time t, linear between neighbouring points; NaN off the data or
+// inside a gap.
+function rateAt(rates, t, gap) {
+  var n = rates ? rates.length : 0
+  for (var i = 0; i < n; i++) {
+    if (rates[i][0] < t) continue
+    if (rates[i][0] === t) return rates[i][1]
+    if (i === 0) return t >= rates[0][0] - gap / 2 ? rates[0][1] : NaN
+    var a = rates[i - 1], b = rates[i]
+    if (b[0] - a[0] > gap) {
+      if (t - a[0] <= gap / 2) return a[1]
+      if (b[0] - t <= gap / 2) return b[1]
+      return NaN
+    }
+    return a[1] + (b[1] - a[1]) * (t - a[0]) / (b[0] - a[0])
+  }
+  return n && t - rates[n - 1][0] <= gap / 2 ? rates[n - 1][1] : NaN
+}
+
+// Mean draw over the points in [start, end] (each bucket is the same length
+// of time, so a plain mean is the time-weighted one); null without data.
+function averageRate(rates, start, end) {
+  var sum = 0, n = 0
+  for (var i = 0; i < (rates || []).length; i++) {
+    if (rates[i][0] < start || rates[i][0] > end) continue
+    sum += rates[i][1]
+    n++
+  }
+  return n ? Math.round(sum / n * 10) / 10 : null
+}
+
 // ---------- Sleep settings ----------
 
 // The idle service's own rule: a non-negative number of seconds, 0 = off.
@@ -265,6 +323,11 @@ if (typeof module !== "undefined") {
     overlap: overlap,
     windowStats: windowStats,
     withLivePoint: withLivePoint,
+    rateGap: rateGap,
+    niceCeil: niceCeil,
+    rateScale: rateScale,
+    rateAt: rateAt,
+    averageRate: averageRate,
     idleSeconds: idleSeconds,
     shortSpan: shortSpan,
     chipOptions: chipOptions,

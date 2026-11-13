@@ -2,7 +2,8 @@
 """Battery history collector for the kov.battery-history panel.
 
 Merges three local sources into one JSON timeline:
-  * UPower's charge history (/var/lib/upower/history-charge-<id>.dat)
+  * UPower's charge history (/var/lib/upower/history-charge-<id>.dat) and,
+    beside it, the power (energy-rate) history (history-rate-<id>.dat)
   * the system journal: boots, suspend/resume, lid open/close
   * the user journal: Omarchy shell idle cycles (screensaver, lock = display off)
 
@@ -81,6 +82,45 @@ def read_samples(path, since):
     return samples[max(0, i - 1):]
 
 
+RATE_BUCKETS = 1500  # power points per window, whatever its length
+
+
+def read_rates(charge_path, start, now, window):
+    """UPower's energy-rate history (watts), from the file beside the charge
+    history, averaged into time buckets so a week stays light.
+
+    Only discharging readings are kept: on the charger the rate is what goes
+    into the battery, not what the laptop uses. UPower logs 0 W around state
+    changes; those are dropped too. Returns ([[t, watts], ...], bucket_seconds).
+    """
+    bucket = max(60.0, window / RATE_BUCKETS)
+    if not charge_path:
+        return [], bucket
+    path = os.path.join(os.path.dirname(charge_path),
+                        os.path.basename(charge_path).replace("history-charge-", "history-rate-", 1))
+    sums = {}
+    try:
+        with open(path, "r", errors="replace") as f:
+            for line in f:
+                parts = line.split("\t")
+                if len(parts) < 3 or parts[2].strip() != "discharging":
+                    continue
+                try:
+                    t = int(parts[0])
+                    w = float(parts[1])
+                except ValueError:
+                    continue
+                if t < start or t > now or not (0 < w < 500):
+                    continue
+                acc = sums.setdefault(int((t - start) // bucket), [0.0, 0.0, 0])
+                acc[0] += t
+                acc[1] += w
+                acc[2] += 1
+    except OSError:
+        return [], bucket
+    return [[round(st / n, 1), round(sw / n, 2)] for _, (st, sw, n) in sorted(sums.items())], bucket
+
+
 def journal_lines(args, since):
     cmd = ["journalctl", "--no-pager", "-q", "-o", "short-unix", "--since", "@%d" % since] + args
     for line in run(cmd).splitlines():
@@ -138,6 +178,7 @@ def main():
 
     path = battery_history_file()
     samples = read_samples(path, start)
+    rates, rate_bucket = read_rates(path, start, now, window)
 
     # --- running: boot intervals --------------------------------------------
     running = Steps(False)
@@ -327,6 +368,8 @@ def main():
         "samples": [[t, p, s] for t, p, s in samples],
         "screen": [[round(a, 1), round(b, 1), c] for a, b, c in screen],
         "power": [[round(a, 1), round(b, 1), c] for a, b, c in power],
+        "rate": rates,
+        "rateBucket": rate_bucket,
         "stats": stats,
     }
     json.dump(out, sys.stdout, separators=(",", ":"))
