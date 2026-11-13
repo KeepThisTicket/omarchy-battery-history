@@ -2,6 +2,7 @@
 // be exercised with plain node.
 
 var RANGES = [
+  { value: "6h", seconds: 6 * 3600 },
   { value: "12h", seconds: 12 * 3600 },
   { value: "24h", seconds: 24 * 3600 },
   { value: "3d", seconds: 3 * 86400 },
@@ -17,7 +18,7 @@ function rangeSeconds(value) {
 function rangeIndex(value) {
   for (var i = 0; i < RANGES.length; i++)
     if (RANGES[i].value === value) return i
-  return 1
+  return value === "24h" ? -1 : rangeIndex("24h")  // unknown: the 24h default
 }
 
 function shiftRange(value, delta) {

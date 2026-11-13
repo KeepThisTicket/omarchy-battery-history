@@ -1,10 +1,12 @@
 {
   "title": "Battery history",
   "summary": "Last %1 · %2 screen on",
+  "range.6h": "6 hours",
   "range.12h": "12 hours",
   "range.24h": "24 hours",
   "range.3d": "3 days",
   "range.7d": "7 days",
+  "chip.6h": "6h",
   "chip.12h": "12h",
   "chip.24h": "24h",
   "chip.3d": "3d",

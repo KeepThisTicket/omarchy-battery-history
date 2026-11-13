@@ -4,7 +4,7 @@ A bar widget for the [Omarchy](https://omarchy.org) shell that shows your laptop
 battery level over time, and what the machine was doing underneath it: screen on,
 screensaver, display off, lid closed, charging, asleep, hibernated or powered off.
 
-- **Graph** of battery % for the last 12 h, 24 h, 3 days or 7 days. The line turns
+- **Graph** of battery % for the last 6 h, 12 h, 24 h, 3 days or 7 days. The line turns
   yellow while charging, and sleep, hibernation and power-off are shaded.
 - **Strips** under the graph for the screen, the charger and sleep (hibernation in blue).
 - **Zoom**: scroll over the graph to zoom the time axis around the pointer,
