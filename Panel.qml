@@ -72,6 +72,92 @@ Panel {
   readonly property var samples: batteryLog ? Model.withLivePoint(batteryLog.samples, batteryLog.now, livePercent, liveState) : []
   readonly property var screenSegs: batteryLog ? batteryLog.screen : []
   readonly property var powerSegs: batteryLog ? batteryLog.power : []
+
+  // Power draw overlay: UPower's rate history, on battery only (on the
+  // charger the rate is what goes into the battery, not what the laptop
+  // uses). Toggled by the Power chip; setting "showPower".
+  readonly property bool showPower: setting("showPower", false) === true
+  readonly property color powerColor: "#E0694A"
+  readonly property var rates: batteryLog && Array.isArray(batteryLog.rate) ? batteryLog.rate : []
+  readonly property real rateGap: Model.rateGap(batteryLog ? batteryLog.rateBucket : 60)
+  readonly property real powerMax: Model.rateScale(rates, t0, t1)
+  readonly property real shownWatts: hoverTime < 0 ? NaN : Model.rateAt(rates, hoverTime, rateGap)
+  readonly property var avgDraw: Model.averageRate(rates, t0, t1)
+
+  function watts(v) {
+    return (v === null || v === undefined || isNaN(v)) ? "—" : strings.t("watts").arg(Commons.I18n.formatNumber(v, 1))
+  }
+
+  function setShowPower(on) {
+    root.settings = Object.assign({}, root.settings, { showPower: on })
+    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
+  }
+
+  // ---------- Power mode ----------
+  // power-profiles-daemon keeps no history, so this widget records each
+  // profile change (it lives in the bar, so it runs whenever the shell does)
+  // and the collector turns the log into a strip. Toggled by the Mode chip;
+  // setting "showMode".
+  readonly property bool showMode: setting("showMode", false) === true
+  readonly property var modeSegs: batteryLog && Array.isArray(batteryLog.mode) ? batteryLog.mode : []
+  readonly property color saverColor: "#7CC47F"
+  readonly property color performanceColor: "#C784D9"
+  function modeColor(c) {
+    if (c === "power-saver") return root.saverColor
+    if (c === "balanced") return Util.alpha(root.fg, 0.45)
+    if (c === "performance") return root.performanceColor
+    return "transparent"
+  }
+
+  function setShowMode(on) {
+    root.settings = Object.assign({}, root.settings, { showMode: on })
+    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
+  }
+
+  readonly property string profilesLog: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
+    + "/kov.battery-history/profiles.tsv"
+  property string lastLoggedProfile: ""
+  property var profileQueue: []
+
+  function profileName(p) {
+    if (p === PowerProfile.PowerSaver) return "power-saver"
+    if (p === PowerProfile.Balanced) return "balanced"
+    if (p === PowerProfile.Performance) return "performance"
+    return ""
+  }
+
+  function logProfile() {
+    var name = profileName(PowerProfiles.profile)
+    if (!name || name === root.lastLoggedProfile) return
+    root.lastLoggedProfile = name
+    root.profileQueue = root.profileQueue.concat([[String(Math.floor(Date.now() / 1000)), name]])
+    root.flushProfiles()
+  }
+
+  function flushProfiles() {
+    if (profileWriter.running || root.profileQueue.length === 0) return
+    var next = root.profileQueue[0]
+    root.profileQueue = root.profileQueue.slice(1)
+    profileWriter.command = ["sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && printf '%s\\t%s\\n' \"$2\" \"$3\" >> \"$1\"",
+                             "sh", root.profilesLog, next[0], next[1]]
+    profileWriter.running = true
+  }
+
+  Process {
+    id: profileWriter
+    onExited: root.flushProfiles()
+  }
+
+  Connections {
+    target: PowerProfiles
+    function onProfileChanged() { root.logProfile() }
+  }
+
+  // The first reading waits for the daemon's value to arrive after a shell
+  // start; the slow poll covers a daemon that wasn't up when the shell was
+  // (its change signal is then never connected).
+  Timer { interval: 3000; running: true; onTriggered: root.logProfile() }
+  Timer { interval: 60000; running: true; repeat: true; onTriggered: root.logProfile() }
   // Stats for the window on screen, so they follow the zoom. Raw samples,
   // without the live point, so the full range matches the collector's.
   readonly property var stats: batteryLog
@@ -122,6 +208,9 @@ Panel {
       if (s) parts.push(tr("screen." + s))
       var p = Model.segmentAt(powerSegs, hoverTime)
       if (p && s !== "off" && s !== "hibernate") parts.push(tr("power." + p))
+      if (showPower && !isNaN(shownWatts)) parts.push(watts(shownWatts))
+      var m = Model.segmentAt(modeSegs, hoverTime)
+      if (showMode && m) parts.push(tr("mode." + m))
       return parts.join(" · ")
     }
     if (!batteryLog) return loading ? tr("loading") : tr("noData")
@@ -382,18 +471,51 @@ Panel {
           }
         }
 
-        // ---------- Range ----------
-        ButtonGroup {
-          id: rangeGroup
+        // ---------- Range, and the power overlay toggle ----------
+        Item {
           width: parent.width
-          spacing: Style.space(6)
-          focusable: false
-          options: Model.RANGES.map(function(r) { return { value: r.value, label: strings.t("chip." + r.value) } })
-          value: root.range
-          foreground: root.fg
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onChanged: function(v) { root.setRange(v) }
+          implicitHeight: Math.max(rangeGroup.implicitHeight, powerToggle.implicitHeight)
+
+          ButtonGroup {
+            id: rangeGroup
+            spacing: Style.space(6)
+            focusable: false
+            options: Model.RANGES.map(function(r) { return { value: r.value, label: strings.t("chip." + r.value) } })
+            value: root.range
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onChanged: function(v) { root.setRange(v) }
+          }
+
+          Row {
+            id: overlayToggles
+            anchors.right: parent.right
+            spacing: Style.space(6)
+
+            Button {
+              text: root.tr("chip.mode")
+              tooltipText: root.tr("chip.modeTip")
+              selected: root.showMode
+              bordered: true
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.setShowMode(!root.showMode)
+            }
+
+            Button {
+              id: powerToggle
+              text: root.tr("chip.power")
+              tooltipText: root.tr("chip.powerTip")
+              selected: root.showPower
+              bordered: true
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.setShowPower(!root.showPower)
+            }
+          }
         }
 
         // ---------- Plot: chart, strips, time axis ----------
@@ -401,13 +523,16 @@ Panel {
           id: plot
           width: parent.width
           readonly property real gutter: Style.space(52)
+          // Room for the watt axis on the right while the overlay is on.
+          readonly property real rightGutter: root.showPower ? Style.space(40) : 0
           readonly property real plotX: gutter
-          readonly property real plotW: width - gutter
+          readonly property real plotW: width - gutter - rightGutter
           readonly property real chartH: Style.space(128)
           readonly property real laneH: Math.max(4, Style.space(6))
           readonly property real laneGap: Style.space(12)
           readonly property real lanesTop: chartH + Style.space(14)
-          readonly property real axisTop: lanesTop + 3 * laneH + 2 * laneGap + Style.space(8)
+          readonly property int laneCount: root.showMode ? 4 : 3
+          readonly property real axisTop: lanesTop + laneCount * laneH + (laneCount - 1) * laneGap + Style.space(8)
           implicitHeight: axisTop + Style.font.caption + Style.space(4)
 
           function xFor(t) { return plotX + plotW * (t - root.t0) / Math.max(1, root.t1 - root.t0) }
@@ -428,6 +553,22 @@ Panel {
             }
           }
 
+          // Watt labels on the right, in the overlay's colour
+          Repeater {
+            model: root.showPower ? [1, 0.5, 0] : []
+            Text {
+              required property var modelData
+              textFormat: Text.PlainText
+              text: root.watts(root.powerMax * modelData).replace(/\.0(?=\D*$)/, "")
+              color: root.powerColor
+              opacity: 0.85
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              x: plot.plotX + plot.plotW + Style.space(6)
+              y: chart.yFor(modelData * 100) - height / 2
+            }
+          }
+
           Canvas {
             id: chart
             x: plot.plotX
@@ -437,6 +578,7 @@ Panel {
 
             readonly property real pad: Style.space(4)
             function yFor(p) { return pad + (1 - p / 100) * (height - 2 * pad) }
+            function yForW(w) { return yFor(100 * Math.min(1, w / Math.max(1, root.powerMax))) }
             function xFor(t) { return width * (t - root.t0) / Math.max(1, root.t1 - root.t0) }
 
             onPaint: {
@@ -505,10 +647,32 @@ Panel {
                 ctx.lineTo(px(j), py(j))
               }
               if (current !== null) ctx.stroke()
+
+              // Power draw on its own watt scale, broken across gaps
+              // (charging, asleep, off), over the battery line.
+              var r = root.rates
+              if (!root.showPower || !r || r.length === 0) return
+              var rv = Model.visibleRange(r, root.t0, root.t1)
+              ctx.globalAlpha = 0.9
+              ctx.strokeStyle = String(root.powerColor)
+              ctx.lineWidth = Math.max(1, Style.space(1.5))
+              ctx.beginPath()
+              for (var q = rv.lo; q <= rv.hi; q++) {
+                var rx = xFor(r[q][0]), ry = yForW(r[q][1])
+                if (q === rv.lo || r[q][0] - r[q - 1][0] > root.rateGap) {
+                  // A lone point still shows as a short tick.
+                  ctx.moveTo(rx - 1, ry)
+                }
+                ctx.lineTo(rx, ry)
+              }
+              ctx.stroke()
             }
 
             Connections {
               target: root
+              function onShowPowerChanged() { chart.requestPaint() }
+              function onRatesChanged() { chart.requestPaint() }
+              function onPowerMaxChanged() { chart.requestPaint() }
               function onSamplesChanged() { chart.requestPaint() }
               function onScreenSegsChanged() { chart.requestPaint() }
               function onFgChanged() { chart.requestPaint() }
@@ -562,6 +726,16 @@ Panel {
               return "transparent"
             }
           }
+          Lane {
+            visible: root.showMode
+            width: plot.width
+            gutter: plot.gutter
+            trackWidth: plot.plotW
+            y: plot.lanesTop + 3 * (plot.laneH + plot.laneGap)
+            label: root.tr("lane.mode")
+            segments: root.modeSegs
+            colorFor: function(c) { return root.modeColor(c) }
+          }
 
           // Time axis
           Repeater {
@@ -610,6 +784,15 @@ Panel {
             x: Math.round(plot.plotX + plot.plotW * Math.max(0, root.hoverFraction) - width / 2)
             y: chart.yFor(isNaN(root.shownPercent) ? 0 : root.shownPercent) - height / 2
           }
+          Rectangle {
+            visible: root.showPower && root.hoverFraction >= 0 && !isNaN(root.shownWatts)
+            width: Math.max(6, Style.space(7))
+            height: width
+            radius: width / 2
+            color: root.powerColor
+            x: Math.round(plot.plotX + plot.plotW * Math.max(0, root.hoverFraction) - width / 2)
+            y: chart.yForW(isNaN(root.shownWatts) ? 0 : root.shownWatts) - height / 2
+          }
 
           MouseArea {
             x: plot.plotX
@@ -647,6 +830,10 @@ Panel {
           LegendDot { swatch: root.chargeColor; text: root.tr("legend.charging") }
           LegendDot { swatch: Util.alpha(root.fg, 0.5); text: root.tr("legend.sleep") }
           LegendDot { swatch: root.hibernateColor; text: root.tr("legend.hibernate") }
+          LegendDot { visible: root.showPower; swatch: root.powerColor; text: root.tr("legend.power") }
+          LegendDot { visible: root.showMode; swatch: root.saverColor; text: root.tr("mode.power-saver") }
+          LegendDot { visible: root.showMode; swatch: root.modeColor("balanced"); text: root.tr("mode.balanced") }
+          LegendDot { visible: root.showMode; swatch: root.performanceColor; text: root.tr("mode.performance") }
         }
 
         // ---------- Stats ----------
@@ -683,6 +870,7 @@ Panel {
               InfoPair { label: root.tr("stats.drainOn"); value: root.rate(root.stats.drainScreenOn) }
               InfoPair { label: root.tr("stats.drainSleep"); value: root.rate(root.stats.drainAsleep) }
               InfoPair { label: root.tr("stats.lid"); value: Model.formatDuration(root.stats.lidClosed) }
+              InfoPair { label: root.tr("stats.avgDraw"); value: root.watts(root.avgDraw) }
               InfoPair {
                 label: root.tr("stats.runtime")
                 value: root.stats.drainScreenOn ? Model.formatDuration(100 / root.stats.drainScreenOn * 3600) : "—"

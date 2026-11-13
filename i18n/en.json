@@ -1,10 +1,12 @@
 {
   "title": "Battery history",
   "summary": "Last %1 · %2 screen on",
+  "range.6h": "6 hours",
   "range.12h": "12 hours",
   "range.24h": "24 hours",
   "range.3d": "3 days",
   "range.7d": "7 days",
+  "chip.6h": "6h",
   "chip.12h": "12h",
   "chip.24h": "24h",
   "chip.3d": "3d",
@@ -53,5 +55,16 @@
   "sleep.lidOther": "Closing the lid: %1. The hibernate delay only applies to suspend-then-hibernate.",
   "sleep.cancelled": "Hibernate delay not changed: password dialog cancelled.",
   "sleep.saveFailed": "Could not save the hibernate delay.",
-  "sleep.idleSaveFailed": "Could not save the screensaver and lock times."
+  "sleep.idleSaveFailed": "Could not save the screensaver and lock times.",
+  "chip.power": "Power",
+  "chip.powerTip": "Overlay the laptop's power draw while on battery",
+  "legend.power": "Power draw (on battery)",
+  "stats.avgDraw": "Avg draw, on battery",
+  "watts": "%1 W",
+  "chip.mode": "Mode",
+  "chip.modeTip": "Show the power mode (power profile) under the graph. Recorded from when this plugin first ran.",
+  "lane.mode": "Mode",
+  "mode.power-saver": "Power saver",
+  "mode.balanced": "Balanced",
+  "mode.performance": "Performance"
 }
