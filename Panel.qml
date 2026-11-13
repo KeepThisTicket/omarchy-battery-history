@@ -92,6 +92,72 @@ Panel {
     root.settings = Object.assign({}, root.settings, { showPower: on })
     if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
   }
+
+  // ---------- Power mode ----------
+  // power-profiles-daemon keeps no history, so this widget records each
+  // profile change (it lives in the bar, so it runs whenever the shell does)
+  // and the collector turns the log into a strip. Toggled by the Mode chip;
+  // setting "showMode".
+  readonly property bool showMode: setting("showMode", false) === true
+  readonly property var modeSegs: batteryLog && Array.isArray(batteryLog.mode) ? batteryLog.mode : []
+  readonly property color saverColor: "#7CC47F"
+  readonly property color performanceColor: "#C784D9"
+  function modeColor(c) {
+    if (c === "power-saver") return root.saverColor
+    if (c === "balanced") return Util.alpha(root.fg, 0.45)
+    if (c === "performance") return root.performanceColor
+    return "transparent"
+  }
+
+  function setShowMode(on) {
+    root.settings = Object.assign({}, root.settings, { showMode: on })
+    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
+  }
+
+  readonly property string profilesLog: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
+    + "/kov.battery-history/profiles.tsv"
+  property string lastLoggedProfile: ""
+  property var profileQueue: []
+
+  function profileName(p) {
+    if (p === PowerProfile.PowerSaver) return "power-saver"
+    if (p === PowerProfile.Balanced) return "balanced"
+    if (p === PowerProfile.Performance) return "performance"
+    return ""
+  }
+
+  function logProfile() {
+    var name = profileName(PowerProfiles.profile)
+    if (!name || name === root.lastLoggedProfile) return
+    root.lastLoggedProfile = name
+    root.profileQueue = root.profileQueue.concat([[String(Math.floor(Date.now() / 1000)), name]])
+    root.flushProfiles()
+  }
+
+  function flushProfiles() {
+    if (profileWriter.running || root.profileQueue.length === 0) return
+    var next = root.profileQueue[0]
+    root.profileQueue = root.profileQueue.slice(1)
+    profileWriter.command = ["sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && printf '%s\\t%s\\n' \"$2\" \"$3\" >> \"$1\"",
+                             "sh", root.profilesLog, next[0], next[1]]
+    profileWriter.running = true
+  }
+
+  Process {
+    id: profileWriter
+    onExited: root.flushProfiles()
+  }
+
+  Connections {
+    target: PowerProfiles
+    function onProfileChanged() { root.logProfile() }
+  }
+
+  // The first reading waits for the daemon's value to arrive after a shell
+  // start; the slow poll covers a daemon that wasn't up when the shell was
+  // (its change signal is then never connected).
+  Timer { interval: 3000; running: true; onTriggered: root.logProfile() }
+  Timer { interval: 60000; running: true; repeat: true; onTriggered: root.logProfile() }
   // Stats for the window on screen, so they follow the zoom. Raw samples,
   // without the live point, so the full range matches the collector's.
   readonly property var stats: batteryLog
@@ -143,6 +209,8 @@ Panel {
       var p = Model.segmentAt(powerSegs, hoverTime)
       if (p && s !== "off" && s !== "hibernate") parts.push(tr("power." + p))
       if (showPower && !isNaN(shownWatts)) parts.push(watts(shownWatts))
+      var m = Model.segmentAt(modeSegs, hoverTime)
+      if (showMode && m) parts.push(tr("mode." + m))
       return parts.join(" · ")
     }
     if (!batteryLog) return loading ? tr("loading") : tr("noData")
@@ -420,17 +488,33 @@ Panel {
             onChanged: function(v) { root.setRange(v) }
           }
 
-          Button {
-            id: powerToggle
+          Row {
+            id: overlayToggles
             anchors.right: parent.right
-            text: root.tr("chip.power")
-            tooltipText: root.tr("chip.powerTip")
-            selected: root.showPower
-            bordered: true
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            fontSize: Style.font.bodySmall
-            onClicked: root.setShowPower(!root.showPower)
+            spacing: Style.space(6)
+
+            Button {
+              text: root.tr("chip.mode")
+              tooltipText: root.tr("chip.modeTip")
+              selected: root.showMode
+              bordered: true
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.setShowMode(!root.showMode)
+            }
+
+            Button {
+              id: powerToggle
+              text: root.tr("chip.power")
+              tooltipText: root.tr("chip.powerTip")
+              selected: root.showPower
+              bordered: true
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.setShowPower(!root.showPower)
+            }
           }
         }
 
@@ -447,7 +531,8 @@ Panel {
           readonly property real laneH: Math.max(4, Style.space(6))
           readonly property real laneGap: Style.space(12)
           readonly property real lanesTop: chartH + Style.space(14)
-          readonly property real axisTop: lanesTop + 3 * laneH + 2 * laneGap + Style.space(8)
+          readonly property int laneCount: root.showMode ? 4 : 3
+          readonly property real axisTop: lanesTop + laneCount * laneH + (laneCount - 1) * laneGap + Style.space(8)
           implicitHeight: axisTop + Style.font.caption + Style.space(4)
 
           function xFor(t) { return plotX + plotW * (t - root.t0) / Math.max(1, root.t1 - root.t0) }
@@ -641,6 +726,16 @@ Panel {
               return "transparent"
             }
           }
+          Lane {
+            visible: root.showMode
+            width: plot.width
+            gutter: plot.gutter
+            trackWidth: plot.plotW
+            y: plot.lanesTop + 3 * (plot.laneH + plot.laneGap)
+            label: root.tr("lane.mode")
+            segments: root.modeSegs
+            colorFor: function(c) { return root.modeColor(c) }
+          }
 
           // Time axis
           Repeater {
@@ -736,6 +831,9 @@ Panel {
           LegendDot { swatch: Util.alpha(root.fg, 0.5); text: root.tr("legend.sleep") }
           LegendDot { swatch: root.hibernateColor; text: root.tr("legend.hibernate") }
           LegendDot { visible: root.showPower; swatch: root.powerColor; text: root.tr("legend.power") }
+          LegendDot { visible: root.showMode; swatch: root.saverColor; text: root.tr("mode.power-saver") }
+          LegendDot { visible: root.showMode; swatch: root.modeColor("balanced"); text: root.tr("mode.balanced") }
+          LegendDot { visible: root.showMode; swatch: root.performanceColor; text: root.tr("mode.performance") }
         }
 
         // ---------- Stats ----------

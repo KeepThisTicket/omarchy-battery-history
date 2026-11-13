@@ -12,7 +12,13 @@ screensaver, display off, lid closed, charging, asleep, hibernated or powered of
 - **Power overlay**: the **Power** chip draws the laptop's power draw (watts, on its
   own scale on the right) over the battery line. It is shown only while on battery:
   on the charger the battery's rate is what goes into it, not what the laptop uses.
-- **Hover** anywhere on the graph for the exact time, percentage, state and power draw.
+- **Power mode**: the **Mode** chip adds a strip for the power profile (power saver,
+  balanced, performance) while the laptop was awake. power-profiles-daemon keeps no
+  history, so the widget records each change itself (to
+  `~/.local/state/kov.battery-history/profiles.tsv`); the strip starts from when the
+  plugin first ran.
+- **Hover** anywhere on the graph for the exact time, percentage, state, power draw
+  and power mode.
 - **Stats for the visible window**, updated as you zoom: screen-on time, asleep,
   hibernated, charging, battery used, drain per hour with the screen on and asleep,
   average power draw on battery, and an estimated runtime on a full charge.
@@ -45,6 +51,7 @@ Everything is read locally. Nothing leaves the machine.
 |---|---|
 | Battery % and charging | UPower's charge history |
 | Power draw | UPower's rate history (`history-rate-*.dat`, beside the charge history) |
+| Power mode | The widget's own log of power-profiles-daemon changes |
 | Boots, suspend, hibernate | Kernel messages in the system journal (`PM: suspend entry/exit`, `PM: hibernation: hibernation entry/exit`) |
 | Lid open / closed | `systemd-logind` messages in the journal |
 | Screensaver / lock / display off | Omarchy's idle service messages in the user journal |
@@ -52,6 +59,8 @@ Everything is read locally. Nothing leaves the machine.
 
 ## What it changes
 
+- **Power mode log**: one line per power-profile change is appended to
+  `~/.local/state/kov.battery-history/profiles.tsv` (a few lines a day).
 - **Screensaver / lock timeouts** are written to `idle.screensaver` and `idle.lock`
   in `~/.config/omarchy/shell.json` (via `set-idle.py`, which changes only those
   two keys). Omarchy applies them immediately.

@@ -6,6 +6,7 @@ Merges three local sources into one JSON timeline:
     beside it, the power (energy-rate) history (history-rate-<id>.dat)
   * the system journal: boots, suspend/resume, lid open/close
   * the user journal: Omarchy shell idle cycles (screensaver, lock = display off)
+  * the panel's own power-profile log (~/.local/state/kov.battery-history/profiles.tsv)
 
 Usage: collect.py [window_seconds]
 """
@@ -119,6 +120,35 @@ def read_rates(charge_path, start, now, window):
     except OSError:
         return [], bucket
     return [[round(st / n, 1), round(sw / n, 2)] for _, (st, sw, n) in sorted(sums.items())], bucket
+
+
+PROFILES = ("power-saver", "balanced", "performance")
+
+
+def profiles_file():
+    """Where the panel records power-profile changes (power-profiles-daemon
+    keeps no history of its own)."""
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "kov.battery-history", "profiles.tsv")
+
+
+def read_profiles():
+    """Lines of "<unix time>\\t<profile>" -> a Steps of the profile in force."""
+    mode = Steps(None)
+    try:
+        with open(profiles_file(), "r", errors="replace") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 2 or parts[1] not in PROFILES:
+                    continue
+                try:
+                    mode.set(float(parts[0]), parts[1])
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    mode.finish()
+    return mode
 
 
 def journal_lines(args, since):
@@ -304,6 +334,30 @@ def main():
         else:
             power.append([a, b, cat])
 
+    # --- power mode timeline (from the panel's own profile log) -------------
+    # Only while awake: the profile means nothing asleep, hibernated or off.
+    # Before the first recorded change the mode is unknown and left blank.
+    mode = read_profiles()
+    mbounds = set(bounds)
+    for t in mode.times:
+        if start < t < now:
+            mbounds.add(t)
+    mbounds = sorted(mbounds)
+    modes = []
+    for a, b in zip(mbounds, mbounds[1:]):
+        if b <= a:
+            continue
+        mid = (a + b) / 2
+        if screen_at(mid) in ("off", "sleep", "hibernate"):
+            continue
+        cat = mode.at(mid)
+        if cat is None:
+            continue
+        if modes and modes[-1][2] == cat and abs(modes[-1][1] - a) < 1:
+            modes[-1][1] = b
+        else:
+            modes.append([a, b, cat])
+
     # --- stats --------------------------------------------------------------
     def overlap(a, b, segs):
         out = {}
@@ -368,6 +422,7 @@ def main():
         "samples": [[t, p, s] for t, p, s in samples],
         "screen": [[round(a, 1), round(b, 1), c] for a, b, c in screen],
         "power": [[round(a, 1), round(b, 1), c] for a, b, c in power],
+        "mode": [[round(a, 1), round(b, 1), c] for a, b, c in modes],
         "rate": rates,
         "rateBucket": rate_bucket,
         "stats": stats,

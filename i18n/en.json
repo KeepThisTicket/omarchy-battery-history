@@ -58,5 +58,11 @@
   "chip.powerTip": "Overlay the laptop's power draw while on battery",
   "legend.power": "Power draw (on battery)",
   "stats.avgDraw": "Avg draw, on battery",
-  "watts": "%1 W"
+  "watts": "%1 W",
+  "chip.mode": "Mode",
+  "chip.modeTip": "Show the power mode (power profile) under the graph. Recorded from when this plugin first ran.",
+  "lane.mode": "Mode",
+  "mode.power-saver": "Power saver",
+  "mode.balanced": "Balanced",
+  "mode.performance": "Performance"
 }
